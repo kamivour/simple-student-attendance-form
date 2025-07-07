@@ -38,10 +38,10 @@ app.post('/submit', upload.single('photo'), (req, res) => {
     // Get form data
     const { name, studentId } = req.body;
     const photoFilename = req.file.filename;
-    const timestamp = new Date().toISOString();
 
     // Format the data as a new row for the CSV
     const timestamp = new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Ho_Chi_Minh' });
+    const csvRow = `${timestamp},${studentId},"${name}","${photoFilename}"\n`;
 
     // Append the new row to your CSV file
     fs.appendFile(csvFilePath, csvRow, 'utf8', (err) => {
