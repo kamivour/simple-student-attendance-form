@@ -1,63 +1,93 @@
 const express = require('express');
 const multer = require('multer');
-const path = require('path');
-const { google } = require('googleapis'); // Import googleapis
+const { google } = require('googleapis');
+const stream = require('stream');
 
 const app = express();
 const port = 3000;
 
-// --- GOOGLE SHEETS SETUP ---
-const SPREADSHEET_ID = '1H1ZLiE4oPClc7vPlybuZZJFd-c6mKB9cL1IyA2GiqrU'; // <-- PASTE YOUR ID HERE
+// --- CONFIGURATION ---
+const SPREADSHEET_ID = '1H1ZLiE4oPClc7vPlybuZZJFd-c6mKB9cL1IyA2GiqrU'; // <-- PASTE YOUR SPREADSHEET ID
+const DRIVE_FOLDER_ID = '1Vxb-0304aOENsjZ0XCJOZpj_2uQFX16D'; // <-- PASTE YOUR FOLDER ID
 
-// Authenticate with Google Sheets
+// --- GOOGLE AUTH SETUP ---
+// Add the 'drive' scope to give permission for Google Drive
 const auth = new google.auth.GoogleAuth({
-    keyFile: 'credentials.json', // The path to your credentials file
-    scopes: 'https://www.googleapis.com/auth/spreadsheets', // The scope for Google Sheets
+    keyFile: 'credentials.json',
+    scopes: [
+        'https://www.googleapis.com/auth/spreadsheets',
+        'https://www.googleapis.com/auth/drive'
+    ],
 });
-const sheets = google.sheets({ version: 'v4', auth: auth });
 
-// --- Multer Storage Configuration (No Changes) ---
-const storage = multer.diskStorage({
-    destination: './uploads/',
-    filename: function(req, file, cb) {
-        const studentId = req.body.studentId || 'unknown';
-        const studentName = req.body.name || 'unknown';
-        const timestamp = Date.now();
-        cb(null, `${studentId}-${studentName}-${timestamp}${path.extname(file.originalname)}`);
-    }
+// Create clients for both Sheets and Drive
+const sheets = google.sheets({ version: 'v4', auth: auth });
+const drive = google.drive({ version: 'v3', auth: auth });
+
+// --- MULTER SETUP ---
+// Change storage to hold files in memory as a buffer
+const upload = multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: 5 * 1024 * 1024 }, // 5MB file size limit
 });
-const upload = multer({ storage: storage });
 
 app.use(express.static('public'));
 
 // --- UPDATED /submit Route ---
 app.post('/submit', upload.single('photo'), async (req, res) => {
+    // Check if a photo was submitted
+    if (!req.file) {
+        return res.status(400).send('<h1>Error: No photo was submitted.</h1>');
+    }
+
     try {
         const { name, studentId } = req.body;
-        const photoFilename = req.file.filename; // We still get the filename
         const timestamp = new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Ho_Chi_Minh' });
+        
+        // Create a buffer and a readable stream for the upload
+        const buffer = req.file.buffer;
+        const bufferStream = new stream.PassThrough();
+        bufferStream.end(buffer);
 
-        // Prepare the row to be appended
-        const newRow = [[timestamp, studentId, name, photoFilename]];
+        // 1. UPLOAD PHOTO TO GOOGLE DRIVE
+        const { data: file } = await drive.files.create({
+            media: {
+                mimeType: req.file.mimetype,
+                body: bufferStream,
+            },
+            requestBody: {
+                name: `${studentId}-${name}-${Date.now()}.jpg`,
+                parents: [DRIVE_FOLDER_ID], // Specify the folder
+            },
+            fields: 'id, webViewLink', // Get the file ID and web link
+        });
 
-        // Append the row to the Google Sheet
+        // Make the file publicly readable
+        await drive.permissions.create({
+            fileId: file.id,
+            requestBody: { role: 'reader', type: 'anyone' },
+        });
+
+        const photoLink = file.webViewLink; // The direct link to the photo
+
+        // 2. APPEND RECORD TO GOOGLE SHEET
+        const newRow = [[timestamp, studentId, name, photoLink]];
         await sheets.spreadsheets.values.append({
             spreadsheetId: SPREADSHEET_ID,
-            range: 'Sheet1!A:D', // The sheet and columns to append to
+            range: 'Sheet1!A:D',
             valueInputOption: 'USER_ENTERED',
-            resource: {
-                values: newRow,
-            },
+            resource: { values: newRow },
         });
 
         console.log(`Attendance logged for: ${name} (${studentId})`);
-        res.send('<h1>Điểm danh thành công.</h1>');
+        res.send('<h1>Attendance Submitted Successfully!</h1><p>You can now close this window.</p>');
 
     } catch (error) {
-        console.error('Error writing to Google Sheet:', error);
+        console.error('Error during submission process:', error);
         res.status(500).send('<h1>Error: Could not save attendance data.</h1>');
     }
 });
+
 
 // --- Start Server (No Changes) ---
 app.listen(port, '0.0.0.0', () => {
