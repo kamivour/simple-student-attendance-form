@@ -1,12 +1,22 @@
 const express = require('express');
 const multer = require('multer');
 const path = require('path');
-const fs = require('fs');
+const { google } = require('googleapis'); // Import googleapis
 
 const app = express();
 const port = 3000;
 
-// --- Multer Storage Configuration (No Changes Here) ---
+// --- GOOGLE SHEETS SETUP ---
+const SPREADSHEET_ID = '1H1ZLiE4oPClc7vPlybuZZJFd-c6mKB9cL1IyA2GiqrU'; // <-- PASTE YOUR ID HERE
+
+// Authenticate with Google Sheets
+const auth = new google.auth.GoogleAuth({
+    keyFile: 'credentials.json', // The path to your credentials file
+    scopes: 'https://www.googleapis.com/auth/spreadsheets', // The scope for Google Sheets
+});
+const sheets = google.sheets({ version: 'v4', auth: auth });
+
+// --- Multer Storage Configuration (No Changes) ---
 const storage = multer.diskStorage({
     destination: './uploads/',
     filename: function(req, file, cb) {
@@ -18,48 +28,38 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage: storage });
 
-
-// --- NEW: CSV Logging Setup ---
-const csvFilePath = path.join(__dirname, 'attendance.csv');
-const csvHeader = 'Timestamp,StudentID,Name,PhotoFilename\n';
-
-// Create the CSV file with a header if it doesn't exist
-if (!fs.existsSync(csvFilePath)) {
-    fs.writeFileSync(csvFilePath, csvHeader, 'utf8');
-}
-
-
-// --- Serve Frontend (No Changes Here) ---
 app.use(express.static('public'));
 
+// --- UPDATED /submit Route ---
+app.post('/submit', upload.single('photo'), async (req, res) => {
+    try {
+        const { name, studentId } = req.body;
+        const photoFilename = req.file.filename; // We still get the filename
+        const timestamp = new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Ho_Chi_Minh' });
 
-// --- UPDATED: Form Submission Handling ---
-app.post('/submit', upload.single('photo'), (req, res) => {
-    // Get form data
-    const { name, studentId } = req.body;
-    const photoFilename = req.file.filename;
+        // Prepare the row to be appended
+        const newRow = [[timestamp, studentId, name, photoFilename]];
 
-    // Format the data as a new row for the CSV
-    const timestamp = new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Ho_Chi_Minh' });
-    const csvRow = `${timestamp},${studentId},"${name}","${photoFilename}"\n`;
-
-    // Append the new row to your CSV file
-    fs.appendFile(csvFilePath, csvRow, 'utf8', (err) => {
-        if (err) {
-            console.error('Error writing to CSV file:', err);
-            // Send an error response to the user
-            return res.status(500).send('<h1>Error: Could not save attendance data.</h1>');
-        }
+        // Append the row to the Google Sheet
+        await sheets.spreadsheets.values.append({
+            spreadsheetId: SPREADSHEET_ID,
+            range: 'Sheet1!A:D', // The sheet and columns to append to
+            valueInputOption: 'USER_ENTERED',
+            resource: {
+                values: newRow,
+            },
+        });
 
         console.log(`Attendance logged for: ${name} (${studentId})`);
-        // Send a success response to the user
-        res.send('<h1>Attendance Submitted!</h1><p>You can now close this window.</p>');
-    });
+        res.send('<h1>Điểm danh thành công.</h1>');
+
+    } catch (error) {
+        console.error('Error writing to Google Sheet:', error);
+        res.status(500).send('<h1>Error: Could not save attendance data.</h1>');
+    }
 });
 
-
-// --- Start Server (No Changes Here) ---
+// --- Start Server (No Changes) ---
 app.listen(port, '0.0.0.0', () => {
     console.log(`Server running at http://localhost:${port}`);
-    console.log(`Access from other devices on the same network via your IP or domain.`);
 });
