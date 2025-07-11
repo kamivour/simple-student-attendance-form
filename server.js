@@ -59,7 +59,7 @@ app.post('/submit', upload.single('photo'), async (req, res) => {
         }));
 
         console.log(`Attendance logged for: ${name} (${studentId})`);
-        res.send('<h1>Attendance Submitted!</h1><p>Note: The photo was not saved.</p>');
+        res.send('<h1>Attendance Submitted!</h1>');
 
     } catch (error) {
         console.error('Error during submission process:', error);
